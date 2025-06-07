@@ -1,0 +1,88 @@
+# Core PyTorch and ML dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Hugging Face transformers and tokenizers
+transformers>=4.30.0
+tokenizers>=0.13.0
+safetensors>=0.3.0
+
+# Sentence transformers for embedding models
+sentence-transformers>=2.2.2
+
+# Scientific computing
+numpy>=1.21.0
+scipy>=1.7.0
+
+# Quantization and optimization
+torch-ao>=0.1.0
+
+# ONNX support (optional)
+onnx>=1.14.0
+onnxruntime>=1.15.0
+
+# Development and utilities
+tqdm>=4.64.0
+requests>=2.28.0
+packaging>=21.0
+
+# Data handling
+datasets>=2.12.0
+pandas>=1.5.0
+
+# Visualization and analysis (optional)
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Code quality
+black>=22.0.0
+flake8>=5.0.0
+isort>=5.10.0
+
+# Documentation
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.2.0
+
+# Jupyter notebook support (optional)
+jupyter>=1.0.0
+ipykernel>=6.15.0
+
+# Android development utilities
+adb-shell>=0.4.0
+
+# Performance profiling
+psutil>=5.9.0
+memory-profiler>=0.60.0
+
+# Configuration management
+pyyaml>=6.0
+omegaconf>=2.3.0
+
+# Logging
+loguru>=0.7.0
+
+# Progress bars and CLI
+rich>=13.0.0
+click>=8.1.0
+typer>=0.9.0
+
+# Model compression and optimization
+neural-compressor>=2.0.0  # Intel's quantization toolkit
+optimum>=1.8.0  # Hugging Face optimization toolkit
+
+# Mobile deployment utilities
+coremltools>=6.3.0  # For iOS deployment comparison
+tensorflow-lite>=2.13.0  # For TFLite comparison
+
+# Benchmarking and profiling
+py-spy>=0.3.14
+line-profiler>=4.0.0
+
+# Version pinning for stability
+# Note: ExecutorCH should be installed separately following the official guide
+# as it requires specific build configurations and dependencies 

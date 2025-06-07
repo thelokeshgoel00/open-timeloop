@@ -1,0 +1,213 @@
+name: Build E5 Model for Qualcomm Devices
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      quantization_level:
+        description: 'Quantization level (int8/int4)'
+        required: false
+        default: 'int8'
+        type: choice
+        options:
+        - int8
+        - int4
+
+env:
+  PYTHON_VERSION: '3.9'
+  MODEL_NAME: 'intfloat/multilingual-e5-large-instruct'
+
+jobs:
+  build-model:
+    runs-on: ubuntu-20.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build
+        
+    - name: Download and cache PyTorch ExecutorCH
+      id: cache-executorch
+      uses: actions/cache@v3
+      with:
+        path: ~/executorch
+        key: executorch-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+        
+    - name: Build PyTorch ExecutorCH
+      if: steps.cache-executorch.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --recursive https://github.com/pytorch/executorch.git
+        cd executorch
+        ./install_requirements.sh
+        cmake -DCMAKE_INSTALL_PREFIX=cmake-out -DCMAKE_BUILD_TYPE=Release -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON -Bcmake-out .
+        cmake --build cmake-out -j$(nproc)
+        
+    - name: Export and quantize E5 model
+      run: |
+        export EXECUTORCH_ROOT=~/executorch
+        python scripts/export_e5_model.py \
+          --model_name ${{ env.MODEL_NAME }} \
+          --output_dir ./models \
+          --quantization_type ${{ github.event.inputs.quantization_level || 'int8' }} \
+          --validate_accuracy
+          
+    - name: Run host inference tests
+      run: |
+        python scripts/inference_example.py \
+          --model_path ./models/e5_model_quantized.pte \
+          --test_mode host \
+          --benchmark
+          
+    - name: Create deployment package
+      run: |
+        mkdir -p deployment-package
+        cp -r models/ deployment-package/
+        cp scripts/deploy_model.sh deployment-package/
+        cp scripts/inference_example.py deployment-package/
+        cp requirements.txt deployment-package/
+        
+        # Create deployment instructions
+        cat > deployment-package/DEPLOY_TO_DEVICE.md << EOF
+        # Device Deployment Instructions
+        
+        This package contains the compiled model ready for device deployment.
+        
+        ## Prerequisites (Manual Steps Required):
+        1. Download Qualcomm AI Engine Direct SDK v2.12.0+ manually from:
+           https://qpm.qualcomm.com/main/tools/details/qualcomm_ai_engine_direct
+           
+        2. Connect your Android device with SM8650 chipset via USB
+        
+        3. Enable USB Debugging on your device
+        
+        ## Deploy to Device:
+        \`\`\`bash
+        # Set SDK path (update with your actual path)
+        export QNN_SDK_ROOT=/path/to/qnn-sdk
+        
+        # Deploy to connected device
+        ./deploy_model.sh --device auto --model_path models/e5_model_quantized.pte
+        \`\`\`
+        
+        ## Generated Files:
+        - \`models/e5_model_quantized.pte\` - Quantized model (${{ github.event.inputs.quantization_level || 'int8' }})
+        - \`models/e5_model_original.pte\` - Original precision model
+        - \`models/validation_report.json\` - Accuracy comparison report
+        EOF
+        
+    - name: Upload deployment artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: e5-model-deployment-${{ github.event.inputs.quantization_level || 'int8' }}-${{ github.sha }}
+        path: deployment-package/
+        retention-days: 30
+        
+    - name: Generate model metrics
+      run: |
+        python -c "
+        import json
+        import os
+        
+        # Load validation report if it exists
+        report_path = './models/validation_report.json'
+        if os.path.exists(report_path):
+            with open(report_path, 'r') as f:
+                report = json.load(f)
+            
+            # Create summary for GitHub
+            summary = f'''
+        ## Model Export Summary
+        
+        | Metric | Value |
+        |--------|-------|
+        | Model Size (Original) | {report.get('original_size_mb', 'N/A')} MB |
+        | Model Size (Quantized) | {report.get('quantized_size_mb', 'N/A')} MB |
+        | Size Reduction | {report.get('compression_ratio', 'N/A')}x |
+        | Accuracy Similarity | {report.get('cosine_similarity', 'N/A')} |
+        | Export Time | {report.get('export_time_seconds', 'N/A')}s |
+        '''
+            
+            with open('model_summary.md', 'w') as f:
+                f.write(summary)
+        "
+        
+    - name: Comment model metrics on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          if (fs.existsSync('model_summary.md')) {
+            const summary = fs.readFileSync('model_summary.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+          }
+
+  test-compatibility:
+    runs-on: ubuntu-20.04
+    needs: build-model
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Download deployment artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: e5-model-deployment-${{ github.event.inputs.quantization_level || 'int8' }}-${{ github.sha }}
+        path: ./deployment-package
+        
+    - name: Test model loading
+      run: |
+        cd deployment-package
+        python -c "
+        import torch
+        from executorch.runtime import Runtime
+        
+        # Test model loading
+        try:
+            runtime = Runtime()
+            program = runtime.load_program('models/e5_model_quantized.pte')
+            print('✅ Model loads successfully')
+            print(f'Model methods: {program.get_method_names()}')
+        except Exception as e:
+            print(f'❌ Model loading failed: {e}')
+            exit(1)
+        "
+        
+    - name: Validate deployment scripts
+      run: |
+        cd deployment-package
+        bash -n deploy_model.sh
+        python -m py_compile inference_example.py
+        echo "✅ All deployment scripts are syntactically valid" 

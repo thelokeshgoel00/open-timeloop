@@ -1,0 +1,364 @@
+#!/bin/bash
+"""
+Download and setup script for Qualcomm AI Engine Direct SDK.
+
+This script helps users download and configure the Qualcomm AI Engine Direct SDK
+required for deploying models on Qualcomm devices with Hexagon NPU acceleration.
+"""
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Configuration
+DEFAULT_INSTALL_DIR="/opt/qcom/aistack"
+QNN_SDK_VERSION="2.12.0"
+QNN_SDK_URL="https://developer.qualcomm.com/software/qualcomm-ai-engine-direct-sdk"
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to check system requirements
+check_system_requirements() {
+    print_status "Checking system requirements..."
+    
+    # Check OS
+    if [[ ! "$(uname -s)" == "Linux" ]]; then
+        print_error "This script is designed for Linux systems only"
+        exit 1
+    fi
+    
+    # Check Ubuntu version
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        if [[ "$ID" == "ubuntu" ]]; then
+            if [[ "$VERSION_ID" != "20.04" ]]; then
+                print_warning "Qualcomm AI Engine Direct SDK is officially supported on Ubuntu 20.04"
+                print_warning "Current version: $VERSION_ID"
+                print_status "Continuing anyway..."
+            else
+                print_success "Ubuntu 20.04 detected - officially supported"
+            fi
+        else
+            print_warning "Non-Ubuntu distribution detected: $ID"
+            print_status "SDK may still work but is not officially supported"
+        fi
+    fi
+    
+    # Check architecture
+    local arch=$(uname -m)
+    if [[ "$arch" != "x86_64" ]]; then
+        print_error "x86_64 architecture required, found: $arch"
+        exit 1
+    fi
+    print_success "x86_64 architecture confirmed"
+    
+    # Check for required tools
+    local required_tools=("wget" "tar" "sudo")
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            print_error "Required tool not found: $tool"
+            exit 1
+        fi
+    done
+    print_success "Required tools available"
+}
+
+# Function to display manual download instructions
+display_manual_instructions() {
+    print_status "Manual Download Instructions:"
+    echo ""
+    echo "1. Go to: $QNN_SDK_URL"
+    echo "2. Log in with your Qualcomm Developer Account"
+    echo "3. Search for 'Qualcomm AI Stack' in the Tool panel"
+    echo "4. Find 'Qualcomm AI Engine Direct SDK' under the AI Stack group"
+    echo "5. Download the Linux version (qnn-v${QNN_SDK_VERSION}.*.tgz)"
+    echo "6. Extract the file to your preferred location"
+    echo ""
+    print_status "Typical installation commands:"
+    echo "  sudo mkdir -p $DEFAULT_INSTALL_DIR"
+    echo "  sudo tar -xzf qnn-v${QNN_SDK_VERSION}.*.tgz -C $DEFAULT_INSTALL_DIR"
+    echo "  sudo chown -R \$(whoami):\$(whoami) $DEFAULT_INSTALL_DIR"
+    echo ""
+}
+
+# Function to verify SDK installation
+verify_sdk_installation() {
+    local install_dir=$1
+    
+    print_status "Verifying SDK installation..."
+    
+    # Check if directory exists
+    if [[ ! -d "$install_dir" ]]; then
+        print_error "Installation directory not found: $install_dir"
+        return 1
+    fi
+    
+    # Look for QNN directories
+    local qnn_dirs=($(find "$install_dir" -maxdepth 2 -name "qnn" -type d 2>/dev/null))
+    
+    if [[ ${#qnn_dirs[@]} -eq 0 ]]; then
+        print_error "No QNN SDK directories found in $install_dir"
+        return 1
+    fi
+    
+    # Check the first found directory
+    local qnn_dir="${qnn_dirs[0]}"
+    print_status "Found QNN directory: $qnn_dir"
+    
+    # Check for required files and directories
+    local required_items=(
+        "QNN_README.txt"
+        "lib/x86_64-linux-clang"
+        "lib/aarch64-android"
+        "include"
+        "bin"
+    )
+    
+    for item in "${required_items[@]}"; do
+        if [[ ! -e "$qnn_dir/$item" ]]; then
+            print_warning "Missing: $qnn_dir/$item"
+        else
+            print_success "Found: $item"
+        fi
+    done
+    
+    # Check version
+    if [[ -f "$qnn_dir/QNN_README.txt" ]]; then
+        local version_line=$(grep -i "version" "$qnn_dir/QNN_README.txt" | head -1)
+        if [[ -n "$version_line" ]]; then
+            print_status "SDK Version: $version_line"
+        fi
+    fi
+    
+    return 0
+}
+
+# Function to setup environment
+setup_environment() {
+    local qnn_sdk_root=$1
+    
+    print_status "Setting up environment..."
+    
+    # Create environment setup script
+    local env_script="$HOME/.qnn_env"
+    
+    cat > "$env_script" << EOF
+#!/bin/bash
+# Qualcomm AI Engine Direct SDK Environment Setup
+# Generated by download_qnn_sdk.sh
+
+export QNN_SDK_ROOT="$qnn_sdk_root"
+export LD_LIBRARY_PATH="\$QNN_SDK_ROOT/lib/x86_64-linux-clang/:\$LD_LIBRARY_PATH"
+
+echo "Qualcomm AI Engine Direct SDK environment loaded"
+echo "QNN_SDK_ROOT: \$QNN_SDK_ROOT"
+EOF
+    
+    chmod +x "$env_script"
+    
+    print_success "Environment script created: $env_script"
+    print_status "To load the environment, run: source $env_script"
+    
+    # Add to bash profile if requested
+    read -p "Add to ~/.bashrc automatically? (y/N): " add_to_bashrc
+    if [[ $add_to_bashrc == [yY] || $add_to_bashrc == [yY][eE][sS] ]]; then
+        if ! grep -q "source $env_script" "$HOME/.bashrc"; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# Qualcomm AI Engine Direct SDK" >> "$HOME/.bashrc"
+            echo "source $env_script" >> "$HOME/.bashrc"
+            print_success "Added to ~/.bashrc"
+        else
+            print_status "Already in ~/.bashrc"
+        fi
+    fi
+}
+
+# Function to run quick test
+run_quick_test() {
+    local qnn_sdk_root=$1
+    
+    print_status "Running quick SDK test..."
+    
+    # Check if libraries can be loaded
+    local test_lib="$qnn_sdk_root/lib/x86_64-linux-clang/libQnnSystem.so"
+    if [[ -f "$test_lib" ]]; then
+        if ldd "$test_lib" >/dev/null 2>&1; then
+            print_success "Library linking test passed"
+        else
+            print_warning "Library linking test failed - may need additional dependencies"
+        fi
+    else
+        print_warning "Test library not found: $test_lib"
+    fi
+    
+    # List available tools
+    local bin_dir="$qnn_sdk_root/bin"
+    if [[ -d "$bin_dir" ]]; then
+        print_status "Available tools in $bin_dir:"
+        ls -la "$bin_dir" | grep -E '\.(sh|py)$' | awk '{print "  " $9}'
+    fi
+}
+
+# Function to display next steps
+display_next_steps() {
+    local qnn_sdk_root=$1
+    
+    print_success "SDK setup complete!"
+    echo ""
+    print_status "Next steps:"
+    echo "1. Load the environment:"
+    echo "   source ~/.qnn_env"
+    echo ""
+    echo "2. Verify environment variables:"
+    echo "   echo \$QNN_SDK_ROOT"
+    echo ""
+    echo "3. Build ExecutorCH with QNN support:"
+    echo "   cd \$EXECUTORCH_ROOT"
+    echo "   mkdir build_x86_64 && cd build_x86_64"
+    echo "   cmake .. -DEXECUTORCH_BUILD_QNN=ON -DQNN_SDK_ROOT=\$QNN_SDK_ROOT"
+    echo ""
+    echo "4. Export your model:"
+    echo "   python scripts/export_e5_model.py --quantize"
+    echo ""
+    echo "5. Deploy to device:"
+    echo "   ./scripts/deploy_model.sh -m e5_model_qnn.pte"
+    echo ""
+}
+
+# Main function
+main() {
+    local install_dir=""
+    local verify_only=false
+    local setup_only=false
+    
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -d|--install-dir)
+                install_dir="$2"
+                shift 2
+                ;;
+            --verify-only)
+                verify_only=true
+                shift
+                ;;
+            --setup-only)
+                setup_only=true
+                shift
+                ;;
+            -h|--help)
+                echo "Usage: $0 [OPTIONS]"
+                echo "Options:"
+                echo "  -d, --install-dir PATH   Installation directory (default: $DEFAULT_INSTALL_DIR)"
+                echo "  --verify-only           Only verify existing installation"
+                echo "  --setup-only            Only setup environment (skip download)"
+                echo "  -h, --help              Show this help"
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Use default if not specified
+    if [[ -z "$install_dir" ]]; then
+        install_dir="$DEFAULT_INSTALL_DIR"
+    fi
+    
+    print_status "Qualcomm AI Engine Direct SDK Setup"
+    print_status "Installation directory: $install_dir"
+    echo "---"
+    
+    # Check system requirements
+    check_system_requirements
+    
+    if [[ "$verify_only" == true ]]; then
+        # Only verify existing installation
+        if verify_sdk_installation "$install_dir"; then
+            print_success "SDK verification passed"
+        else
+            print_error "SDK verification failed"
+            exit 1
+        fi
+        return 0
+    fi
+    
+    if [[ "$setup_only" != true ]]; then
+        # Display download instructions
+        print_status "The Qualcomm AI Engine Direct SDK requires manual download"
+        print_status "due to licensing and registration requirements."
+        echo ""
+        display_manual_instructions
+        
+        read -p "Have you downloaded the SDK? (y/N): " downloaded
+        if [[ $downloaded != [yY] && $downloaded != [yY][eE][sS] ]]; then
+            print_status "Please download the SDK first, then run this script again"
+            exit 0
+        fi
+        
+        # Ask for SDK location
+        read -p "Enter path to downloaded SDK file (.tgz): " sdk_file
+        if [[ ! -f "$sdk_file" ]]; then
+            print_error "File not found: $sdk_file"
+            exit 1
+        fi
+        
+        # Extract SDK
+        print_status "Extracting SDK to $install_dir..."
+        sudo mkdir -p "$install_dir"
+        sudo tar -xzf "$sdk_file" -C "$install_dir"
+        sudo chown -R "$(whoami):$(whoami)" "$install_dir"
+        print_success "SDK extracted successfully"
+    fi
+    
+    # Find QNN directory
+    local qnn_dirs=($(find "$install_dir" -maxdepth 2 -name "qnn" -type d 2>/dev/null))
+    
+    if [[ ${#qnn_dirs[@]} -eq 0 ]]; then
+        print_error "No QNN SDK directories found in $install_dir"
+        print_status "Please check your installation"
+        exit 1
+    fi
+    
+    local qnn_dir="${qnn_dirs[0]}"
+    
+    # Verify installation
+    if ! verify_sdk_installation "$install_dir"; then
+        print_error "SDK verification failed"
+        exit 1
+    fi
+    
+    # Setup environment
+    setup_environment "$qnn_dir"
+    
+    # Run quick test
+    run_quick_test "$qnn_dir"
+    
+    # Display next steps
+    display_next_steps "$qnn_dir"
+}
+
+# Run main function with all arguments
+main "$@"
